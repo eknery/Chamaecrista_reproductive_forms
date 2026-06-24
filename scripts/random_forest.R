@@ -34,18 +34,17 @@ get_mode = function(x) {
 set_train_test = function(data){
   list = list()
   ind = sample(2, size = nrow(data), replace = T, prob = c(0.6, 0.4))
-  list$train = data[ind==2,]
-  list$test = data[ind==1,]
+  list$train = data[ind==1,]
+  list$test = data[ind==2,]
   return(list)
 }
 
 ### null model function
 null_model = function(train, test, target_name){
-  values = train[[target_name]]
+  values = train[,target_name]
   pred = values[sample(nrow(test), replace= F)]
   return(pred)
 }
-
 
 ################################ processing dataset ###########################
 
@@ -101,7 +100,6 @@ for(one_feature in feature_names){
   }
 }
 
-
 ################################### a single RF ################################
 
 ### separating train and test
@@ -125,7 +123,7 @@ conmat = confusionMatrix(
   reference = rf$test$predicted
 )
 
-### getting performance metrics
+### performance metrics
 performance = c(
   "accuracy" = conmat$overall[["Accuracy"]],
   "kappa" = conmat$overall[["Kappa"]],
@@ -140,15 +138,13 @@ performance
 round(importance(rf), 2)
 
 ### improtance plot
-varImpPlot(rf,
-           sort = F,
-           main = paste0("Feature Importance ", target))
-
+varImpPlot(
+  rf,
+  sort = F,
+  main = paste0("Feature Importance")
+)
 
 ############################### optimizing RF model #############################
-
-### repeats
-repeats = 10
 
 ### grid of parameters
 grid = expand.grid(
@@ -157,11 +153,16 @@ grid = expand.grid(
   "maxnodes" = 4
 )
 
-### dataframe to save performances
-all_performances = c()
+### dataframes to save performances
+all_rf_perf = c()
+all_null_perf = c()
 
-### loop
-for(n in 1:repeats){
+### repeats
+repeats = 10
+### initial repeat
+n = 1
+### loop until N repeats
+while(n <= repeats){
   ### separating train and test
   list = set_train_test(data = tds)
   train = list$train
@@ -169,6 +170,7 @@ for(n in 1:repeats){
   ### check if train and test have all classes
   train_check = sum(all_classes %in% unique(train[,target_name]))
   test_check = sum(all_classes %in% unique(test[,target_name]))
+  ### if train and test ok, measure performance
   if(train_check == n_classes & test_check == n_classes){
     for(i in 1:nrow(grid) ){
       ### training model 
@@ -181,168 +183,133 @@ for(n in 1:repeats){
         mtry = grid$mtry[i]
       ) 
       ### confusion matrix
-      conmat = confusionMatrix(
+      rf_conmat = confusionMatrix(
         data = test[,target_name], 
         reference = rf$test$predicted
       )
-      ### getting results
-      performance = c(
+      ### performance metrics
+      rf_perf = c(
         "repeat" = n,
         "grid_line" = i,
         "ntree" = grid$ntree[i],
         "mtry" = grid$mtry[i],
-        "accuracy" = conmat$overall[["Accuracy"]],
-        "kappa" = conmat$overall[["Kappa"]],
-        "sensitivity" = conmat$byClass[,"Sensitivity"],
-        "specificity" = conmat$byClass[,"Specificity"],
-        "tss"= conmat$byClass[,"Sensitivity"] + conmat$byClass[,"Specificity"] - 1
+        "accuracy" = rf_conmat$overall[["Accuracy"]],
+        "kappa" = rf_conmat$overall[["Kappa"]],
+        "sensitivity" = rf_conmat$byClass[,"Sensitivity"],
+        "specificity" = rf_conmat$byClass[,"Specificity"],
+        "tss"= rf_conmat$byClass[,"Sensitivity"] + rf_conmat$byClass[,"Specificity"] - 1
       )
       ### add performance
-      all_performances = rbind(all_performances, performance)
+      all_rf_perf = rbind(all_rf_perf, rf_perf)
       ### check
       print(paste0("Training done! repeat: ", n, ", grid line: ", i) )
     }
+    ### null predictions
+    nullpred = null_model(
+      train = train, 
+      test = test, 
+      target_name = target_name 
+    )
+    ### null confusion matrix
+    null_conmat = confusionMatrix(
+      data = test[,target_name], 
+      reference = nullpred
+    )
+    ## performance metrics
+    null_perf = c(
+      "repeat" = n,
+      "accuracy" = null_conmat$overall[["Accuracy"]],
+      "kappa" = null_conmat$overall[["Kappa"]],
+      "sensitivity" = null_conmat$byClass[,"Sensitivity"],
+      "specificity" = null_conmat$byClass[,"Specificity"],
+      "tss"= null_conmat$byClass[,"Sensitivity"] + null_conmat$byClass[,"Specificity"] - 1
+    )
+    ### add performance
+    all_null_perf = rbind(all_null_perf, null_perf)
+    ### update repeat
+    n = n + 1
   }
 }
 
 ### convert to dataframe
-all_performances = data.frame(all_performances)
+all_rf_perf = data.frame(all_rf_perf)
+### export
+saveRDS(
+  all_rf_perf,
+  "2_model_performance/all_rf_perf.RDS"
+)
 
-############################# plotting ps predictions ############################
+### convert to dataframe
+all_null_perf = data.frame(all_null_perf)
+### export
+saveRDS(
+  all_null_perf,
+  "2_model_performance/all_null_perf.RDS"
+)
 
-### load flower pc scores
-pred_df = read.table("1_flower_analyses/pred_class_ps.csv", sep=",", h=T)
+############################## evaluating performance ##########################
 
-### testing differences
-tab = table(pred_df$geo_state, pred_df$my_pred)
-chisq.test(tab)
+### read performance metrics
+all_rf_perf = readRDS("2_model_performance/all_rf_perf.RDS")
 
-### summarizing
-pred_df= pred_df %>% 
-  group_by(geo_state) %>% 
-  reframe(generalist = sum(my_pred == "generalist"),
-         specialist = sum(my_pred == "specialist"),
-         ) %>% 
-  pivot_longer(cols = c(generalist, specialist), names_to = "pollination" ) %>% 
-  group_by(geo_state) %>% 
-  mutate(perc = 100* value/sum(value) )
+### ignore these columns
+cols_to_ignore = c("repeat.", "grid_line")
 
-### plot param
-axis_title_size = 8
-x_text_size = 7
-y_text_size = 7
-legend_text_size = 6
-legend_key_size = 0.4
-
-### plotting
-pred_plot = ggplot(data = pred_df) + 
-  
-  geom_bar(aes(x = geo_state, 
-               y = perc, 
-               fill = pollination,
-               color = geo_state),
-           stat = "identity", 
-           width = 0.9,
-           linewidth = 0.8,
-           alpha = 0.75) +
-  
-  scale_x_discrete(labels=c("AF" = "AF-endemic", 
-                            "other" = "non-endemic"))+
-  
-  scale_fill_manual(values = c("gray", "black") )+
-  
-  scale_color_manual(values = c("#1E88E5","#D81B60") )+
-  
-  xlab("geographic distribution") +
-  
-  ylab("relative frequency (%)\n of pollination systems") +
-  
-  guides(fill=guide_legend(title="")) +
-  guides(color = "none")+
-  
-  theme(panel.background=element_rect(fill="white"),
-        panel.grid=element_line(colour=NULL),
-        panel.border=element_rect(fill=NA,colour="black"),
-        axis.title=element_text(size=axis_title_size, face="bold"),
-        axis.text.x= element_text(size= x_text_size),
-        axis.text.y = element_text(size=y_text_size, angle = 0),
-        legend.position = "bottom",
-        legend.text = element_text(size= legend_text_size),
-        legend.key = element_blank(),
-        legend.key.size = unit(legend_key_size, 'cm'))
-
-# export plot
-tiff("3_graphs/pred_plot_ps.tiff", units="cm", width=7, height=6.5, res=600)
-  print(pred_plot)
-dev.off()
-
-############################# plotting ms predictions ############################
-
-### load flower pc scores
-pred_df = read.table("1_flower_analyses/pred_class_ms1.csv", sep=",", h=T)
-
-### exploring differences
-pred_df %>% 
-  group_by(geo_state) %>% 
-  reframe(mean(my_pred), sd(my_pred), median(my_pred))
-
-### testing differences
-my_pred = pred_df$my_pred
-geo_state = pred_df$geo_state
-names(my_pred) = pred_df$species
-names(geo_state) = pred_df$species
-
-paov = phylANOVA(tree = mcc_phylo, 
-          x = geo_state ,
-          y = my_pred,
-          posthoc = F)
-
-### plot param
-axis_title_size = 8
-x_text_size = 7
-y_text_size = 7
-legend_text_size = 6
-legend_key_size = 0.4
+### summarise
+rf_perf_mean = all_rf_perf %>% 
+  group_by((grid_line)) %>% 
+  summarise(
+    across(
+      where(is.numeric) & !all_of(cols_to_ignore), 
+      list(mean = ~mean(.x, na.rm = TRUE), sd = ~sd(.x, na.rm = TRUE)),
+      .names = "{.col}_{.fn}"
+    )
+  ) %>% 
+  rename("grid_line" = "(grid_line)")
 
 ### plotting
-pred_plot = ggplot(data = pred_df,
-                   aes(x=geo_state, 
-                       y=my_pred, 
-                       fill=geo_state)) + 
-  
-  geom_point(aes(color=geo_state),
-             position = position_jitter(width = 0.07), 
-             size = 1.2, 
-             alpha = 0.65) +
-  
-  geom_boxplot(width = 0.5, 
-               outlier.shape = NA,
-               alpha = 0.25)+
-  
-  scale_fill_manual(values=c("#1E88E5","#D81B60"))+
-  scale_colour_manual(values=c("#1E88E5","#D81B60"))+
-  scale_x_discrete(labels=c("AF" = "AF-endemic", 
-                            "other" = "non-endemic")) +
-  
-  xlab("geographic distribution") +
-  
-  ylab("relative frequency (%)\n of self pollination") +
-  
-  guides(fill=guide_legend(title="")) +
-  guides(color = "none")+
-  
-  theme(panel.background=element_rect(fill="white"),
-        panel.grid=element_line(colour=NULL),
-        panel.border=element_rect(fill=NA,colour="black"),
-        axis.title=element_text(size=axis_title_size, face="bold"),
-        axis.text.x= element_text(size= x_text_size),
-        axis.text.y = element_text(size=y_text_size, angle = 0),
-        legend.position = "bottom",
-        legend.text = element_text(size= legend_text_size),
-        legend.key = element_blank(),
-        legend.key.size = unit(legend_key_size, 'cm'))
+ggplot(
+  rf_perf_mean,
+  aes(x = grid_line, 
+      y = accuracy_mean) 
+  )+
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(
+    x = "grid line",
+    y = "accuracy"
+  )
 
-# export plot
-tiff("3_graphs/pred_plot_ms.tiff", units="cm", width=7, height=6.5, res=600)
-  print(pred_plot)
-dev.off()
+### getting tss columns
+col_names = colnames(rf_perf_mean)
+col_tss_names = col_names[grepl("tss.", col_names)]
+
+### make 'long' format for TSS
+rf_tss_mean = rf_perf_mean %>%
+  pivot_longer(
+    cols = col_tss_names, 
+    names_to = c("class", ".value"), 
+    names_pattern = "(.*)_(mean|sd)"
+  ) %>% 
+  mutate(class = case_when(
+    grepl("annual", class) ~ "annual",
+    grepl("early", class) ~ "early",
+    grepl("late", class) ~ "late"
+  ))
+
+### plotting
+ggplot(
+  rf_tss_mean,
+  aes(x = grid_line, 
+      y = mean, 
+      group = class, 
+      color = class)
+  ) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(
+    x = "grid line",
+    y = "TSS"
+  )
