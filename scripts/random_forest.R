@@ -1,6 +1,7 @@
 ############################## loading libraries ##############################
 
-if (!require("tidyverse")) install.packages("tidyverse"); require("tidyverse")
+if (!require("tidyverse")) install.packages("tidyverse"); library("tidyverse")
+if (!require("data.table")) install.packages("data.table"); library("data.table")
 if (!require("ggplot2")) install.packages("ggplot2"); library("ggplot2")
 if (!require("randomForest")) install.packages("randomForest"); library("randomForest")
 if (!require("caret")) install.packages("caret"); library("caret")
@@ -112,9 +113,7 @@ rf = randomForest(
   x = train[,feature_names],
   y = train[,target_name],
   xtest= test[,feature_names],
-  ytest= test[,target_name],
-  ntree = 100,
-  mtry = 2
+  ytest= test[,target_name]
 ) 
 
 ### confusion matrix
@@ -146,11 +145,12 @@ varImpPlot(
 
 ############################### optimizing RF model #############################
 
-### grid of parameters
-grid = expand.grid(
-  "ntree" = c(100, 500), 
-  "mtry" = c(2, 10),
-  "maxnodes" = 4
+### parameters
+param = expand.grid(
+  "ntree" = c(100, 500), # number of trees
+  "mtry" = c(1, 10), # number of variables per split
+  "nodesize" = c(1, 2), # minimum number of samples to accept a split
+  "maxnodes" = c(3, 6) # maximum number of splits per tree
 )
 
 ### dataframes to save performances
@@ -172,15 +172,18 @@ while(n <= repeats){
   test_check = sum(all_classes %in% unique(test[,target_name]))
   ### if train and test ok, measure performance
   if(train_check == n_classes & test_check == n_classes){
-    for(i in 1:nrow(grid) ){
+    for(i in 1:nrow(param) ){
+      ###### RF MODEL
       ### training model 
       rf = randomForest(
         x = train[,feature_names],
         y = train[,target_name],
         xtest= test[,feature_names],
         ytest= test[,target_name],
-        ntree = grid$ntree[i],
-        mtry = grid$mtry[i]
+        ntree = param$ntree[i],
+        mtry = param$mtry[i],
+        nodesize = param$nodesize[i],
+        maxnodes = param$maxnodes[i]
       ) 
       ### confusion matrix
       rf_conmat = confusionMatrix(
@@ -190,9 +193,11 @@ while(n <= repeats){
       ### performance metrics
       rf_perf = c(
         "repeat" = n,
-        "grid_line" = i,
-        "ntree" = grid$ntree[i],
-        "mtry" = grid$mtry[i],
+        "param_line" = i,
+        "ntree" = param$ntree[i],
+        "mtry" = param$mtry[i],
+        "nodesize" = param$nodesize[i],
+        "maxnodes" =  param$maxnodes[i],
         "accuracy" = rf_conmat$overall[["Accuracy"]],
         "kappa" = rf_conmat$overall[["Kappa"]],
         "sensitivity" = rf_conmat$byClass[,"Sensitivity"],
@@ -201,31 +206,33 @@ while(n <= repeats){
       )
       ### add performance
       all_rf_perf = rbind(all_rf_perf, rf_perf)
+      ###### NULL MODEL
+      ### null predictions
+      nullpred = null_model(
+        train = train, 
+        test = test, 
+        target_name = target_name 
+      )
+      ### null confusion matrix
+      null_conmat = confusionMatrix(
+        data = test[,target_name], 
+        reference = nullpred
+      )
+      ## performance metrics
+      null_perf = c(
+        "repeat" = n,
+        "param_line" = i,
+        "accuracy" = null_conmat$overall[["Accuracy"]],
+        "kappa" = null_conmat$overall[["Kappa"]],
+        "sensitivity" = null_conmat$byClass[,"Sensitivity"],
+        "specificity" = null_conmat$byClass[,"Specificity"],
+        "tss"= null_conmat$byClass[,"Sensitivity"] + null_conmat$byClass[,"Specificity"] - 1
+      )
+      ### add performance
+      all_null_perf = rbind(all_null_perf, null_perf)
       ### check
-      print(paste0("Training done! repeat: ", n, ", grid line: ", i) )
+      print(paste0("Training done! repeat: ", n, ", param line: ", i) )
     }
-    ### null predictions
-    nullpred = null_model(
-      train = train, 
-      test = test, 
-      target_name = target_name 
-    )
-    ### null confusion matrix
-    null_conmat = confusionMatrix(
-      data = test[,target_name], 
-      reference = nullpred
-    )
-    ## performance metrics
-    null_perf = c(
-      "repeat" = n,
-      "accuracy" = null_conmat$overall[["Accuracy"]],
-      "kappa" = null_conmat$overall[["Kappa"]],
-      "sensitivity" = null_conmat$byClass[,"Sensitivity"],
-      "specificity" = null_conmat$byClass[,"Specificity"],
-      "tss"= null_conmat$byClass[,"Sensitivity"] + null_conmat$byClass[,"Specificity"] - 1
-    )
-    ### add performance
-    all_null_perf = rbind(all_null_perf, null_perf)
     ### update repeat
     n = n + 1
   }
@@ -247,39 +254,66 @@ saveRDS(
   "2_model_performance/all_null_perf.RDS"
 )
 
-############################## evaluating performance ##########################
+############################ evaluating overall performance ####################
 
 ### read performance metrics
 all_rf_perf = readRDS("2_model_performance/all_rf_perf.RDS")
+all_null_perf = readRDS("2_model_performance/all_null_perf.RDS")
 
-### ignore these columns
-cols_to_ignore = c("repeat.", "grid_line")
-
-### summarise
+### summarise 
+## ignore these columns
+cols_to_ignore = c("repeat.", "param_line")
+## RF
 rf_perf_mean = all_rf_perf %>% 
-  group_by((grid_line)) %>% 
+  group_by((param_line)) %>% 
   summarise(
     across(
       where(is.numeric) & !all_of(cols_to_ignore), 
-      list(mean = ~mean(.x, na.rm = TRUE), sd = ~sd(.x, na.rm = TRUE)),
+      list(mean = ~mean(.x, na.rm = TRUE), se = ~sd(.x, na.rm = TRUE)/sqrt(n()) ),
       .names = "{.col}_{.fn}"
     )
   ) %>% 
-  rename("grid_line" = "(grid_line)")
+  rename("param_line" = "(param_line)") %>% 
+  mutate(model = "rf")
+## Null
+null_perf_mean = all_null_perf %>% 
+  group_by((param_line)) %>% 
+  summarise(
+    across(
+      where(is.numeric) & !all_of(cols_to_ignore), 
+      list(mean = ~mean(.x, na.rm = TRUE), se = ~sd(.x, na.rm = TRUE)/sqrt(n()) ),
+      .names = "{.col}_{.fn}"
+    )
+  ) %>% 
+  rename("param_line" = "(param_line)") %>% 
+  mutate(model = "null")
+
+### join mean performance
+perf_mean = rbindlist(list(rf_perf_mean, null_perf_mean), fill = TRUE)
 
 ### plotting
 ggplot(
-  rf_perf_mean,
-  aes(x = grid_line, 
-      y = accuracy_mean) 
+  perf_mean,
+  aes(x = param_line, 
+      y = accuracy_mean,
+      color = model) 
   )+
   geom_line(size = 1) +
   geom_point(size = 2) +
+  geom_errorbar( 
+    aes(
+      ymax = accuracy_mean + accuracy_se, 
+      ymin= accuracy_mean - accuracy_se
+      ),
+    width=0.1
+  ) +
   theme_minimal() +
   labs(
-    x = "grid line",
+    x = "param line",
     y = "accuracy"
   )
+
+########################## evaluating performance by class #####################
 
 ### getting tss columns
 col_names = colnames(rf_perf_mean)
@@ -290,7 +324,7 @@ rf_tss_mean = rf_perf_mean %>%
   pivot_longer(
     cols = col_tss_names, 
     names_to = c("class", ".value"), 
-    names_pattern = "(.*)_(mean|sd)"
+    names_pattern = "(.*)_(mean|se)"
   ) %>% 
   mutate(class = case_when(
     grepl("annual", class) ~ "annual",
@@ -301,15 +335,22 @@ rf_tss_mean = rf_perf_mean %>%
 ### plotting
 ggplot(
   rf_tss_mean,
-  aes(x = grid_line, 
+  aes(x = param_line, 
       y = mean, 
       group = class, 
       color = class)
   ) +
   geom_line(size = 1) +
   geom_point(size = 2) +
+  geom_errorbar( 
+    aes(
+      ymax = mean + se, 
+      ymin = mean - se
+    ),
+    width=0.1
+  ) +
   theme_minimal() +
   labs(
-    x = "grid line",
+    x = "param line",
     y = "TSS"
   )
