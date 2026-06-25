@@ -115,6 +115,8 @@ rf = randomForest(
   xtest= test[,feature_names],
   ytest= test[,target_name]
 ) 
+### check 
+print(rf)
 
 ### confusion matrix
 conmat = confusionMatrix(
@@ -386,10 +388,6 @@ ggplot(
     color = class
     ) 
   )+
-  # geom_point(
-  #   size = 2.5, 
-  #   alpha = 0.25
-  # ) +
   geom_boxplot(
     width = 0.4, 
     outlier.shape = NA,
