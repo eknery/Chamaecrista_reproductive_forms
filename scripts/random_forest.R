@@ -148,7 +148,7 @@ varImpPlot(
 ### parameters
 param = expand.grid(
   "ntree" = c(100, 500), # number of trees
-  "mtry" = c(1, 10), # number of variables per split
+  "mtry" = c(1, 10), # number of randomly chosen features per split
   "nodesize" = c(1, 2), # minimum number of samples to accept a split
   "maxnodes" = c(3, 6) # maximum number of splits per tree
 )
@@ -296,7 +296,8 @@ ggplot(
   perf_mean,
   aes(x = param_line, 
       y = accuracy_mean,
-      color = model) 
+      color = model
+    ) 
   )+
   geom_line(size = 1) +
   geom_point(size = 2) +
@@ -312,6 +313,25 @@ ggplot(
     x = "param line",
     y = "accuracy"
   )
+
+### boxplot
+ggplot(
+  rf_perf_mean,
+  aes(x = as.character(ntree_mean), 
+      y = accuracy_mean,
+  ) 
+  )+
+  geom_point(
+    position = position_jitter(width = 0.07), 
+    size = 2.5, 
+    alpha = 0.25
+  ) +
+  geom_boxplot(
+    width = 0.4, 
+    outlier.shape = NA,
+    alpha = 0.5
+  ) +
+  theme_minimal() 
 
 ########################## evaluating performance by class #####################
 
@@ -335,10 +355,12 @@ rf_tss_mean = rf_perf_mean %>%
 ### plotting
 ggplot(
   rf_tss_mean,
-  aes(x = param_line, 
-      y = mean, 
-      group = class, 
-      color = class)
+  aes(
+    x = param_line, 
+    y = mean, 
+    group = class, 
+    color = class
+    )
   ) +
   geom_line(size = 1) +
   geom_point(size = 2) +
@@ -354,3 +376,27 @@ ggplot(
     x = "param line",
     y = "TSS"
   )
+
+### boxplot
+ggplot(
+  rf_tss_mean,
+  aes(
+    x = as.character(mtry_mean), 
+    y = mean,
+    color = class
+    ) 
+  )+
+  # geom_point(
+  #   size = 2.5, 
+  #   alpha = 0.25
+  # ) +
+  geom_boxplot(
+    width = 0.4, 
+    outlier.shape = NA,
+    alpha = 0.5
+  ) +
+  theme_minimal() +
+  labs(
+    y = "TSS"
+  )
+
